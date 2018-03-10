@@ -349,11 +349,7 @@ int module_start(SceSize argc, const void *args) {
   LOG("buttons held: 0x%08X", ctrl.buttons);
   if (!(ctrl.buttons & (SCE_CTRL_LTRIGGER | SCE_CTRL_L1)) &&
       ksceIoGetstat("ur0:shell/db/dbr.db-err", &stat) < 0) {
-    ret = plugin_load_config();
-    if (ret < 0) {
-      LOG("HEN config load failed: %x", ret);
-      return SCE_KERNEL_START_FAILED;
-    }
+    plugin_load_config();
     plugin_load_all(KERNEL_PID, "KERNEL");
   } else {
     LOG("skipping plugin loading");

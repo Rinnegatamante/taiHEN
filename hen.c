@@ -34,6 +34,15 @@ typedef size_t Elf32_Off;
 
 #define EI_NIDENT 16
 
+// from https://wiki.henkaku.xyz/vita/SceIofilemgr
+typedef struct io_scheduler_item { //size is 0x14 - allocated from SceIoScheduler heap
+   void *unk_0; // parent
+   uint32_t unk_4; // 0
+   uint32_t unk_8; // 0
+   uint32_t unk_C; // 0
+   uint32_t unk_10; // pointer to unknown module data section
+} io_scheduler_item;
+
 typedef struct {
   unsigned char e_ident[EI_NIDENT]; /* ident bytes */
   Elf32_Half  e_type;     /* file type */
@@ -119,8 +128,11 @@ static tai_hook_ref_t g_unload_process_hook;
 /** Hook reference to `is_cex` */
 static tai_hook_ref_t g_is_cex_hook;
 
+/** Hook reference to `io_scheduler` */
+static tai_hook_ref_t g_io_scheduler_hook;
+
 /** References to the hooks */
-static SceUID g_hooks[12];
+static SceUID g_hooks[13];
 
 /** Is the current decryption a homebrew? */
 static int g_is_homebrew;
@@ -317,6 +329,16 @@ static int package_check_2_patched(void) {
 static int is_cex_patched(void) {
   TAI_CONTINUE(int, g_is_cex_hook);
   return 0;
+}
+
+/**
+ * @brief      Patch to fix filehandles invalidation on app resume
+ */
+static int io_scheduler_patched(io_scheduler_item *item, int r1) {
+  int ret = TAI_CONTINUE(int, g_io_scheduler_hook, item, r1);
+  if(ret == 0x80010013 &&item->unk_10 == 0x800) 
+    item->unk_10 = 1;
+  return ret;
 }
 
 /**
@@ -523,7 +545,38 @@ int hen_add_patches(void) {
                                               is_cex_patched);
   if (g_hooks[11] < 0) goto fail;
   LOG("is_cex_patched added");
-
+  
+  tai_module_info_t tai_info;
+  memset(&tai_info,0,sizeof(tai_module_info_t));
+  tai_info.size = sizeof(tai_module_info_t);
+  taiGetModuleInfoForKernel(KERNEL_PID, "SceIofilemgr", &tai_info);
+  switch(tai_info.module_nid) {
+  case 0xA96ACE9D: // 3.65
+  case 0x90DA33DE: // 3.68
+    g_hooks[12] =  taiHookFunctionOffsetForKernel(KERNEL_PID,
+                                              &g_io_scheduler_hook,
+                                              tai_info.modid,
+                                              0,
+                                              0xB3D8,
+                                              1,
+                                              io_scheduler_patched);
+    break;
+  case 0x9642948C: // 3.60
+    g_hooks[12] =  taiHookFunctionOffsetForKernel(KERNEL_PID,
+                                              &g_io_scheduler_hook,
+                                              tai_info.modid,
+                                              0,
+                                              0xD400,
+                                              1,
+                                              io_scheduler_patched);
+    break;
+  default:
+    g_hooks[12] = -1;
+    break;
+  }
+  if (g_hooks[12] < 0) LOG("io_scheduler patch missing");
+  else LOG("io_scheduler_patched added");
+  
   return TAI_SUCCESS;
 fail:
   if (g_hooks[0] >= 0) {
@@ -585,5 +638,6 @@ int hen_remove_patches(void) {
   ret |= taiHookReleaseForKernel(g_hooks[9], g_nid_poison_hook);
   ret |= taiHookReleaseForKernel(g_hooks[10], g_unload_process_hook);
   ret |= taiHookReleaseForKernel(g_hooks[11], g_is_cex_hook);
+  if (g_hooks[12] >= 0) ret |= taiHookReleaseForKernel(g_hooks[12], g_io_scheduler_hook);
   return ret;
 }
